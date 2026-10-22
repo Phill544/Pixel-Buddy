@@ -11,6 +11,21 @@ MAESTRO_UUID = "25e97ff7-24ce-4c4c-8951-f764a708f7b5"
 PIXEL_BUDS_CLASSES = (0x240404, 0x244404)
 
 
+def _system_env() -> dict:
+    """Environment for running system programs from the plugin."""
+    # Decky runs plugins from a bundled runtime that puts its own libraries on
+    # LD_LIBRARY_PATH, and programs we start inherit it. Those libraries can
+    # need a newer glibc than SteamOS has (on 3.8, bluetoothctl fails to start),
+    # so restore the system's library path, as Decky does for its own commands.
+    env = dict(os.environ)
+    original = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if original:
+        env["LD_LIBRARY_PATH"] = original
+    else:
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 class Plugin:
     pbpctrl_path: str = ""
     _lock: asyncio.Lock = None
@@ -106,6 +121,7 @@ class Plugin:
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_system_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
@@ -126,7 +142,7 @@ class Plugin:
         # connected or not, and the search order is random on every run. With
         # an old pair still paired, it would sometimes try to connect to those
         # and time out. Find the connected pair here instead.
-        devices = await self._run_bluetoothctl("devices")
+        devices = await self._run_bluetoothctl("devices", "Connected")
         addresses = list(dict.fromkeys(
             re.findall(r"Device ((?:[0-9A-F]{2}:){5}[0-9A-F]{2})", devices)
         ))
@@ -143,13 +159,19 @@ class Plugin:
             "bluetoothctl", *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_system_env(),
         )
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
             raise Exception("bluetoothctl timed out")
+
+        if proc.returncode != 0:
+            err = stderr.decode(errors="replace").strip()
+            raise Exception(f"bluetoothctl {' '.join(args)} failed: {err}")
+
         return stdout.decode(errors="replace")
 
     @staticmethod
