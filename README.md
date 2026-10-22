@@ -7,7 +7,7 @@ A Decky Loader plugin that lets you monitor battery and control ANC on your Goog
 ## Features
 
 - Battery levels for left bud, right bud, and case, with charging indicators
-- ANC mode switching: Noise Cancellation / Off / Aware
+- ANC mode switching: Noise Cancellation / Off / Aware, plus Adaptive on Pixel Buds Pro 2
 - Auto-refresh every 5 seconds
 
 ## Install

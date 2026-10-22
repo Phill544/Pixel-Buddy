@@ -24,10 +24,15 @@ interface BatteryInfo {
   case_charging: boolean;
 }
 
+interface AncInfo {
+  mode: string;
+  adaptive_supported: boolean;
+}
+
 // ── Backend calls ──
 
 const getBattery = callable<[], BatteryInfo>("get_battery");
-const getAnc = callable<[], string>("get_anc");
+const getAnc = callable<[], AncInfo>("get_anc");
 const setAnc = callable<[mode: string], boolean>("set_anc");
 const isBluetoothOn = callable<[], boolean>("is_bluetooth_on");
 
@@ -158,6 +163,14 @@ const IconNoiseAware: FC<{ size?: number }> = ({ size = 28 }) => (
   </svg>
 );
 
+// No Material Symbol exists for adaptive noise control, so this pairs the ear
+// shared by the icons above with the ring from `auto_mode`.
+const IconNoiseControlAdaptive: FC<{ size?: number }> = ({ size = 28 }) => (
+  <svg width={size} height={size} viewBox="0 -960 960 960" fill="currentColor">
+    <path d="M120-228v68q0 17-11.5 28.5T80-120q-17 0-28.5-11.5T40-160v-160q0-17 11.5-28.5T80-360h160q17 0 28.5 11.5T280-320q0 17-11.5 28.5T240-280h-58q51 75 129.5 117.5T480-120q104 0 190-54t132-145q9-17 23.5-27t33.5-6q18 4 23.5 20.5T879-296q-54 116-161 186T480-40q-108 0-202.5-49.5T120-228ZM83-520q-17 0-27.5-12.5T48-562q10-47 26-86.5t43-79.5q10-15 26-17t29 11q14 14 14 30.5T175-670q-17 26-27 52t-18 57q-4 18-16.5 29.5T83-520Zm357-358q0 19-11.5 31T398-831q-30 7-55.5 18T291-785q-16 11-32.5 10T228-790q-12-12-10.5-27.5T233-844q39-26 77.5-42.5T396-912q18-3 31 7t13 27Zm294 88q-14 14-31 14.5T670-786q-26-17-52-27t-57-18q-18-4-29.5-16.5T520-878q0-17 12.5-27t29.5-7q48 9 87 25t79 43q14 10 16 26t-10 28Zm144 270q-19 0-31-11.5T831-562q-8-31-18.5-56.5T785-671q-11-16-10-32.5t15-30.5q12-12 27.5-10t26.5 16q27 40 43 79t25 87q3 17-7 29.5T878-520ZM519-240q-39 0-70-24t-45-62q-3-8-6.5-15.5T388-355l-50-51q-26-26-42-60t-16-72q0-75 52.5-128.5T460-720q52 0 95.5 27.5T622-618q10 20-1.5 39T586-560q-12 0-21.5-6.5T550-584q-13-26-37-41t-53-15q-42 0-71 29t-29 71q0 21 7.5 40t22.5 34l55 54q14 14 22.5 30.5T482-347q5 12 15 19.5t23 7.5q11 0 20.5-5.5T555-341q5-9 14-14t20-5q23 0 35 19t1 39q-16 29-44.5 45.5T519-240Zm21-160q25 0 42.5-17.5T600-460q0-25-17.5-42.5T540-520q-25 0-42.5 17.5T480-460q0 25 17.5 42.5T540-400Z"/>
+  </svg>
+);
+
 // ── ANC Toggle Grid ──
 
 interface AncMode {
@@ -170,6 +183,7 @@ const ANC_MODES: AncMode[] = [
   { id: "active", label: "Noise Cancel", Icon: IconNoiseControlOn },
   { id: "off",    label: "Off",          Icon: IconNoiseControlOff },
   { id: "aware",  label: "Aware", Icon: IconNoiseAware },
+  { id: "adaptive", label: "Adaptive", Icon: IconNoiseControlAdaptive },
 ];
 
 // Border is set via the shorthand in BOTH base and active so React's style
@@ -214,6 +228,12 @@ const ancLabelBase: CSSProperties = {
   opacity: 0.5,
 };
 
+// With four modes (Pixel Buds Pro 2) the cards only just fit the panel, so
+// tighten the spacing to keep the "Adaptive" label inside its card.
+const ANC_COMPACT_GAP = 6;
+const ancCardCompact: CSSProperties = { padding: "12px 2px 10px" };
+const ancLabelCompact: CSSProperties = { letterSpacing: "0.3px" };
+
 // SteamUI's `Focusable` strips `className` from its wrapper div but applies
 // `.gpfocus` to the focused element imperatively. We wrap the grid in a plain
 // `<div>` (which keeps our class) and scope CSS to descendants of that wrapper
@@ -230,16 +250,26 @@ const ancFocusStyles = `
 }
 `;
 
-const AncToggleGrid: FC<{ selected: string; disabled?: boolean; onSelect: (id: string) => void }> = ({
-  selected, disabled, onSelect,
+const AncToggleGrid: FC<{
+  modes: AncMode[];
+  selected: string;
+  disabled?: boolean;
+  onSelect: (id: string) => void;
+}> = ({
+  modes, selected, disabled, onSelect,
 }) => {
+  const compact = modes.length > 3;
+  const gap = compact ? ANC_COMPACT_GAP : 8;
+  const cardCompact = compact ? ancCardCompact : {};
+  const labelCompact = compact ? ancLabelCompact : {};
+
   if (disabled) {
     return (
-      <div style={{ display: "flex", gap: 8, padding: "8px 0 4px" }}>
-        {ANC_MODES.map(mode => (
-          <div key={mode.id} style={ancCardDisabled}>
+      <div style={{ display: "flex", gap, padding: "8px 0 4px" }}>
+        {modes.map(mode => (
+          <div key={mode.id} style={{ ...ancCardDisabled, ...cardCompact }}>
             <span style={{ opacity: 0.5 }}><mode.Icon size={28} /></span>
-            <span style={{ ...ancLabelBase }}>{mode.label}</span>
+            <span style={{ ...ancLabelBase, ...labelCompact }}>{mode.label}</span>
           </div>
         ))}
       </div>
@@ -250,20 +280,20 @@ const AncToggleGrid: FC<{ selected: string; disabled?: boolean; onSelect: (id: s
     <div className={ANC_WRAP_CLASS}>
       <style>{ancFocusStyles}</style>
       {/* @ts-ignore - flow-children is a valid SP prop but not in the type defs */}
-      <Focusable flow-children="horizontal" style={{ display: "flex", gap: 8, padding: "8px 0 4px" }}>
-        {ANC_MODES.map(mode => {
+      <Focusable flow-children="horizontal" style={{ display: "flex", gap, padding: "8px 0 4px" }}>
+        {modes.map(mode => {
           const isActive = selected === mode.id;
           const fadeClass = isActive ? "" : ANC_FADE_CLASS;
           return (
             <Focusable
               key={mode.id}
               onActivate={() => onSelect(mode.id)}
-              style={isActive ? ancCardActive : ancCardBase}
+              style={{ ...(isActive ? ancCardActive : ancCardBase), ...cardCompact }}
             >
               <span className={fadeClass} style={{ color: isActive ? ACCENT : "inherit", opacity: isActive ? 1 : 0.5 }}>
                 <mode.Icon size={28} />
               </span>
-              <span className={fadeClass} style={{ ...ancLabelBase, color: isActive ? ACCENT : "inherit", opacity: isActive ? 1 : 0.5 }}>
+              <span className={fadeClass} style={{ ...ancLabelBase, ...labelCompact, color: isActive ? ACCENT : "inherit", opacity: isActive ? 1 : 0.5 }}>
                 {mode.label}
               </span>
             </Focusable>
@@ -279,6 +309,7 @@ const AncToggleGrid: FC<{ selected: string; disabled?: boolean; onSelect: (id: s
 const Content: FC = () => {
   const [battery, setBattery] = useState<BatteryInfo | null>(null);
   const [ancMode, setAncMode] = useState<string>("off");
+  const [adaptiveSupported, setAdaptiveSupported] = useState<boolean>(false);
   const [connected, setConnected] = useState<boolean>(false);
   const [btOn, setBtOn] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
@@ -299,7 +330,8 @@ const Content: FC = () => {
       setBattery(bat);
       setConnected(true);
       const anc = await getAnc();
-      setAncMode(anc);
+      setAncMode(anc.mode);
+      setAdaptiveSupported(anc.adaptive_supported);
     } catch {
       setConnected(false);
     } finally {
@@ -381,6 +413,9 @@ const Content: FC = () => {
       <div style={{ height: 4 }} />
       <PanelSection title="ANC">
         <AncToggleGrid
+          modes={ANC_MODES.filter(mode =>
+            mode.id !== "adaptive" || adaptiveSupported || ancMode === "adaptive"
+          )}
           selected={ancMode}
           disabled={ancMode === "unknown"}
           onSelect={async (mode) => {

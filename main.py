@@ -1,14 +1,16 @@
 import os
 import re
 import asyncio
-from typing import Optional
+from typing import Optional, Tuple
 
 import decky
 
 # Service UUID pbpctrl connects to, and the device classes it accepts
 # (Pixel Buds Pro, Pixel Buds Pro 2)
 MAESTRO_UUID = "25e97ff7-24ce-4c4c-8951-f764a708f7b5"
-PIXEL_BUDS_CLASSES = (0x240404, 0x244404)
+PIXEL_BUDS_PRO_CLASS = 0x240404
+PIXEL_BUDS_PRO_2_CLASS = 0x244404
+PIXEL_BUDS_CLASSES = (PIXEL_BUDS_PRO_CLASS, PIXEL_BUDS_PRO_2_CLASS)
 
 
 def _system_env() -> dict:
@@ -29,6 +31,8 @@ def _system_env() -> dict:
 class Plugin:
     pbpctrl_path: str = ""
     _lock: asyncio.Lock = None
+    # Device class of the buds pbpctrl last ran against
+    _buds_class: int = 0
 
     async def _main(self):
         self._lock = asyncio.Lock()
@@ -52,24 +56,25 @@ class Plugin:
         output = await self._run_pbpctrl("show", "battery")
         return self._parse_battery(output)
 
-    async def get_anc(self) -> str:
+    async def get_anc(self) -> dict:
         output = await self._run_pbpctrl("get", "anc")
         # pbpctrl logs warnings (e.g. connection retries) to stdout before the value
         lines = output.strip().splitlines()
         raw = lines[-1].strip().lower() if lines else ""
         # pbpctrl returns named values or "unknown (N)" with numeric codes
-        if raw in ("off", "active", "aware"):
-            return raw
-        # "unknown (N)" means buds aren't being worn — pass through as "unknown"
-        if "unknown" in raw:
-            return "unknown"
-        return "unknown"
+        mode = raw if raw in ("off", "active", "aware", "adaptive") else "unknown"
+        return {
+            "mode": mode,
+            # Only the Pixel Buds Pro 2 have adaptive noise cancellation
+            "adaptive_supported": self._buds_class == PIXEL_BUDS_PRO_2_CLASS,
+        }
 
     async def set_anc(self, mode: str) -> bool:
         mode_map = {
             "off": "off",
             "active": "active",
             "aware": "aware",
+            "adaptive": "adaptive",
         }
         pbpctrl_mode = mode_map.get(mode.lower())
         if not pbpctrl_mode:
@@ -106,9 +111,10 @@ class Plugin:
         if not os.path.exists(self.pbpctrl_path):
             raise Exception("pbpctrl binary not found")
 
-        address = await self._find_buds_address()
-        if address is None:
+        buds = await self._find_buds()
+        if buds is None:
             raise Exception("no connected Pixel Buds found")
+        address, self._buds_class = buds
 
         async with self._lock:
             return await self._run_pbpctrl_locked("--device", address, *args)
@@ -137,7 +143,8 @@ class Plugin:
 
         return stdout.decode()
 
-    async def _find_buds_address(self) -> Optional[str]:
+    async def _find_buds(self) -> Optional[Tuple[str, int]]:
+        """Return the address and device class of the connected Pixel Buds."""
         # Without --device, pbpctrl uses the first paired Pixel Buds it finds,
         # connected or not, and the search order is random on every run. With
         # an old pair still paired, it would sometimes try to connect to those
@@ -150,8 +157,9 @@ class Plugin:
             *(self._run_bluetoothctl("info", address) for address in addresses)
         )
         for address, info in zip(addresses, infos):
-            if self._is_connected_buds(info):
-                return address
+            device_class = self._connected_buds_class(info)
+            if device_class is not None:
+                return address, device_class
         return None
 
     async def _run_bluetoothctl(self, *args: str) -> str:
@@ -175,14 +183,13 @@ class Plugin:
         return stdout.decode(errors="replace")
 
     @staticmethod
-    def _is_connected_buds(info: str) -> bool:
+    def _connected_buds_class(info: str) -> Optional[int]:
+        """Return the device class if `bluetoothctl info` shows connected Pixel Buds."""
         class_match = re.search(r"Class:\s+0x([0-9a-fA-F]+)", info)
-        return (
-            "Connected: yes" in info
-            and class_match is not None
-            and int(class_match.group(1), 16) in PIXEL_BUDS_CLASSES
-            and MAESTRO_UUID in info.lower()
-        )
+        if class_match is None or "Connected: yes" not in info or MAESTRO_UUID not in info.lower():
+            return None
+        device_class = int(class_match.group(1), 16)
+        return device_class if device_class in PIXEL_BUDS_CLASSES else None
 
     @staticmethod
     def _parse_battery(output: str) -> dict:
