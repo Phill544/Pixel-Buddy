@@ -42,6 +42,9 @@ yalc.lock
 
 .vscode/settings.json
 
+# Steam Deck address remembered by deploy.ps1
+.deckip
+
 # Ignore output folder
 
 backend/out
