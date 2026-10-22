@@ -1,8 +1,14 @@
 import os
 import re
 import asyncio
+from typing import Optional
 
 import decky
+
+# Service UUID pbpctrl connects to, and the device classes it accepts
+# (Pixel Buds Pro, Pixel Buds Pro 2)
+MAESTRO_UUID = "25e97ff7-24ce-4c4c-8951-f764a708f7b5"
+PIXEL_BUDS_CLASSES = (0x240404, 0x244404)
 
 
 class Plugin:
@@ -33,7 +39,9 @@ class Plugin:
 
     async def get_anc(self) -> str:
         output = await self._run_pbpctrl("get", "anc")
-        raw = output.strip().lower()
+        # pbpctrl logs warnings (e.g. connection retries) to stdout before the value
+        lines = output.strip().splitlines()
+        raw = lines[-1].strip().lower() if lines else ""
         # pbpctrl returns named values or "unknown (N)" with numeric codes
         if raw in ("off", "active", "aware"):
             return raw
@@ -64,13 +72,7 @@ class Plugin:
 
     async def is_bluetooth_on(self) -> bool:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "bluetoothctl", "show",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
-            return "Powered: yes" in stdout.decode()
+            return "Powered: yes" in await self._run_bluetoothctl("show")
         except Exception:
             return True  # assume on if we can't check
 
@@ -89,8 +91,12 @@ class Plugin:
         if not os.path.exists(self.pbpctrl_path):
             raise Exception("pbpctrl binary not found")
 
+        address = await self._find_buds_address()
+        if address is None:
+            raise Exception("no connected Pixel Buds found")
+
         async with self._lock:
-            return await self._run_pbpctrl_locked(*args)
+            return await self._run_pbpctrl_locked("--device", address, *args)
 
     async def _run_pbpctrl_locked(self, *args: str) -> str:
         cmd = [self.pbpctrl_path] + list(args)
@@ -105,6 +111,7 @@ class Plugin:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()
             raise Exception("pbpctrl timed out")
 
         if proc.returncode != 0:
@@ -113,6 +120,47 @@ class Plugin:
             raise Exception(f"pbpctrl failed: {err}")
 
         return stdout.decode()
+
+    async def _find_buds_address(self) -> Optional[str]:
+        # Without --device, pbpctrl uses the first paired Pixel Buds it finds,
+        # connected or not, and the search order is random on every run. With
+        # an old pair still paired, it would sometimes try to connect to those
+        # and time out. Find the connected pair here instead.
+        devices = await self._run_bluetoothctl("devices")
+        addresses = list(dict.fromkeys(
+            re.findall(r"Device ((?:[0-9A-F]{2}:){5}[0-9A-F]{2})", devices)
+        ))
+        infos = await asyncio.gather(
+            *(self._run_bluetoothctl("info", address) for address in addresses)
+        )
+        for address, info in zip(addresses, infos):
+            if self._is_connected_buds(info):
+                return address
+        return None
+
+    async def _run_bluetoothctl(self, *args: str) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            "bluetoothctl", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise Exception("bluetoothctl timed out")
+        return stdout.decode(errors="replace")
+
+    @staticmethod
+    def _is_connected_buds(info: str) -> bool:
+        class_match = re.search(r"Class:\s+0x([0-9a-fA-F]+)", info)
+        return (
+            "Connected: yes" in info
+            and class_match is not None
+            and int(class_match.group(1), 16) in PIXEL_BUDS_CLASSES
+            and MAESTRO_UUID in info.lower()
+        )
 
     @staticmethod
     def _parse_battery(output: str) -> dict:
