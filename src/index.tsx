@@ -4,7 +4,7 @@ import {
   definePlugin,
   staticClasses,
 } from "@decky/ui";
-import { callable } from "@decky/api";
+import { callable, toaster } from "@decky/api";
 import { useState, useEffect, useCallback, useRef, FC, CSSProperties } from "react";
 import { FaHeadphones } from "react-icons/fa";
 
@@ -314,6 +314,10 @@ const Content: FC = () => {
   const [btOn, setBtOn] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const pollingRef = useRef(false);
+  // Count ANC changes the user has made, and those still being applied, so a
+  // poll that overlaps a change doesn't put the old mode back on screen
+  const ancChangesRef = useRef(0);
+  const ancPendingRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (pollingRef.current) return;
@@ -326,12 +330,16 @@ const Content: FC = () => {
         setConnected(false);
         return;
       }
+      const changes = ancChangesRef.current;
       const bat = await getBattery();
-      setBattery(bat);
-      setConnected(true);
       const anc = await getAnc();
-      setAncMode(anc.mode);
+      // Update everything together so the ANC row never shows stale values
+      setBattery(bat);
+      if (ancPendingRef.current === 0 && ancChangesRef.current === changes) {
+        setAncMode(anc.mode);
+      }
       setAdaptiveSupported(anc.adaptive_supported);
+      setConnected(true);
     } catch {
       setConnected(false);
     } finally {
@@ -345,6 +353,25 @@ const Content: FC = () => {
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const selectAnc = useCallback(async (mode: string) => {
+    ancChangesRef.current++;
+    ancPendingRef.current++;
+    setAncMode(mode);
+    try {
+      await setAnc(mode);
+    } catch {
+      toaster.toast({ title: "Pixel Buddy", body: "Couldn't change noise control" });
+      // Show the mode the buds are actually in again
+      try {
+        setAncMode((await getAnc()).mode);
+      } catch {
+        // The next poll will correct it
+      }
+    } finally {
+      ancPendingRef.current--;
+    }
+  }, []);
 
   if (loading || !connected) {
     const title = loading ? "Connecting..." : !btOn ? "Bluetooth Off" : "Not Connected";
@@ -418,10 +445,7 @@ const Content: FC = () => {
           )}
           selected={ancMode}
           disabled={ancMode === "unknown"}
-          onSelect={async (mode) => {
-            setAncMode(mode);
-            await setAnc(mode);
-          }}
+          onSelect={selectAnc}
         />
       </PanelSection>
       <div style={{
