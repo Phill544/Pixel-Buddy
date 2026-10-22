@@ -1,6 +1,6 @@
 {
   "name": "pixel-buddy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Monitor battery and control ANC for your Google Pixel Buds Pro on Steam Deck",
   "type": "module",
   "scripts": {
