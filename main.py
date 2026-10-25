@@ -1,16 +1,17 @@
 import os
 import re
 import asyncio
-from typing import Optional, Tuple
+from typing import NamedTuple, Optional
 
 import decky
 
-# Service UUID pbpctrl connects to, and the device classes it accepts
-# (Pixel Buds Pro, Pixel Buds Pro 2)
+# Service UUID used by the Pixel Buds Maestro protocol.
 MAESTRO_UUID = "25e97ff7-24ce-4c4c-8951-f764a708f7b5"
-PIXEL_BUDS_PRO_CLASS = 0x240404
-PIXEL_BUDS_PRO_2_CLASS = 0x244404
-PIXEL_BUDS_CLASSES = (PIXEL_BUDS_PRO_CLASS, PIXEL_BUDS_PRO_2_CLASS)
+
+
+class ConnectedBuds(NamedTuple):
+    address: str
+    adaptive_supported: bool
 
 
 def _system_env() -> dict:
@@ -30,12 +31,12 @@ def _system_env() -> dict:
 
 class Plugin:
     pbpctrl_path: str = ""
-    _lock: asyncio.Lock = None
-    # Device class of the buds pbpctrl last ran against
-    _buds_class: int = 0
+    _lock: asyncio.Lock
+    _buds: Optional[ConnectedBuds] = None
 
     async def _main(self):
         self._lock = asyncio.Lock()
+        self._buds = None
         self.pbpctrl_path = os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "pbpctrl")
         if os.path.exists(self.pbpctrl_path):
             os.chmod(self.pbpctrl_path, 0o755)
@@ -63,10 +64,13 @@ class Plugin:
         raw = lines[-1].strip().lower() if lines else ""
         # pbpctrl returns named values or "unknown (N)" with numeric codes
         mode = raw if raw in ("off", "active", "aware", "adaptive") else "unknown"
+        # A reported adaptive mode also identifies support when the device has
+        # been renamed and its Bluetooth name no longer contains the model.
+        if mode == "adaptive" and self._buds is not None:
+            self._buds = self._buds._replace(adaptive_supported=True)
         return {
             "mode": mode,
-            # Only the Pixel Buds Pro 2 have adaptive noise cancellation
-            "adaptive_supported": self._buds_class == PIXEL_BUDS_PRO_2_CLASS,
+            "adaptive_supported": self._buds is not None and self._buds.adaptive_supported,
         }
 
     async def set_anc(self, mode: str) -> bool:
@@ -91,10 +95,14 @@ class Plugin:
             return False
 
     async def is_bluetooth_on(self) -> bool:
-        try:
-            return "Powered: yes" in await self._run_bluetoothctl("show")
-        except Exception:
-            return True  # assume on if we can't check
+        async with self._lock:
+            try:
+                powered = "Powered: yes" in await self._run_bluetoothctl("show")
+                if not powered:
+                    self._buds = None
+                return powered
+            except Exception:
+                return True  # assume on if we can't check
 
     async def get_device_info(self) -> dict:
         try:
@@ -111,13 +119,21 @@ class Plugin:
         if not os.path.exists(self.pbpctrl_path):
             raise Exception("pbpctrl binary not found")
 
-        buds = await self._find_buds()
-        if buds is None:
-            raise Exception("no connected Pixel Buds found")
-        address, self._buds_class = buds
-
+        # Keep discovery under the same lock as the RFCOMM command so battery,
+        # ANC and user actions share one cached device, even on first connection.
         async with self._lock:
-            return await self._run_pbpctrl_locked("--device", address, *args)
+            buds = self._buds or await self._find_buds()
+            if buds is None:
+                raise Exception("no connected Pixel Buds found")
+            try:
+                output = await self._run_pbpctrl_locked("--device", buds.address, *args)
+            except Exception:
+                # The next call rediscovers the connected pair after a timeout,
+                # disconnect or other command failure. Do not retain stale support.
+                self._buds = None
+                raise
+            self._buds = buds
+            return output
 
     async def _run_pbpctrl_locked(self, *args: str) -> str:
         cmd = [self.pbpctrl_path] + list(args)
@@ -143,23 +159,30 @@ class Plugin:
 
         return stdout.decode()
 
-    async def _find_buds(self) -> Optional[Tuple[str, int]]:
-        """Return the address and device class of the connected Pixel Buds."""
+    async def _find_buds(self) -> Optional[ConnectedBuds]:
+        """Resolve connected Pixel Buds and their advertised model once."""
         # Without --device, pbpctrl uses the first paired Pixel Buds it finds,
         # connected or not, and the search order is random on every run. With
         # an old pair still paired, it would sometimes try to connect to those
         # and time out. Find the connected pair here instead.
         devices = await self._run_bluetoothctl("devices", "Connected")
         addresses = list(dict.fromkeys(
-            re.findall(r"Device ((?:[0-9A-F]{2}:){5}[0-9A-F]{2})", devices)
+            address.upper() for address in re.findall(
+                r"Device ((?:[0-9A-F]{2}:){5}[0-9A-F]{2})", devices, re.IGNORECASE
+            )
         ))
-        infos = await asyncio.gather(
-            *(self._run_bluetoothctl("info", address) for address in addresses)
-        )
-        for address, info in zip(addresses, infos):
-            device_class = self._connected_buds_class(info)
-            if device_class is not None:
-                return address, device_class
+        for address in addresses:
+            try:
+                info = await self._run_bluetoothctl("info", address)
+            except Exception:
+                # Another device may disappear between listing and inspection.
+                continue
+            if self._is_connected_buds(info):
+                model = re.search(r"^\s*Name:\s*(.+)$", info, re.MULTILINE)
+                adaptive_supported = model is not None and re.search(
+                    r"\bpixel buds pro 2\b", model.group(1), re.IGNORECASE
+                ) is not None
+                return ConnectedBuds(address, adaptive_supported)
         return None
 
     async def _run_bluetoothctl(self, *args: str) -> str:
@@ -183,13 +206,12 @@ class Plugin:
         return stdout.decode(errors="replace")
 
     @staticmethod
-    def _connected_buds_class(info: str) -> Optional[int]:
-        """Return the device class if `bluetoothctl info` shows connected Pixel Buds."""
-        class_match = re.search(r"Class:\s+0x([0-9a-fA-F]+)", info)
-        if class_match is None or "Connected: yes" not in info or MAESTRO_UUID not in info.lower():
-            return None
-        device_class = int(class_match.group(1), 16)
-        return device_class if device_class in PIXEL_BUDS_CLASSES else None
+    def _is_connected_buds(info: str) -> bool:
+        """Identify connected buds by service UUID, regardless of CoD flags."""
+        return (
+            re.search(r"^\s*Connected:\s+yes\s*$", info, re.MULTILINE) is not None
+            and MAESTRO_UUID in info.lower()
+        )
 
     @staticmethod
     def _parse_battery(output: str) -> dict:

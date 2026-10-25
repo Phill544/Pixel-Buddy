@@ -21,7 +21,9 @@ A Decky Loader plugin that lets you monitor battery and control ANC on your Goog
 
 ## Usage
 
-Open the case near your Deck so the buds connect, then open the plugin. Battery levels appear automatically, and you can tap any of the three ANC cards to switch mode. The plugin polls the buds every 5 seconds.
+Take the buds out of the case so they connect to your Deck, then open the plugin. Battery levels and charging status appear in standard Steam settings rows. Use the **Noise Control** dropdown to change mode with touch or your controller. The plugin polls the buds every 5 seconds and reuses the connected device until a command fails or Bluetooth is turned off.
+
+Adaptive noise cancellation is shown when the Bluetooth device name identifies Pixel Buds Pro 2, or when the buds report that Adaptive is already active. If you've renamed your Pro 2 buds and the option is missing, select Adaptive on another device once or restore the model name and reconnect the buds.
 
 ## Troubleshooting
 

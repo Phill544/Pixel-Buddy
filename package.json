@@ -1,12 +1,12 @@
 {
   "name": "pixel-buddy",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Monitor battery and control ANC for your Google Pixel Buds Pro on Steam Deck",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c -w",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "python -m unittest discover -s tests -v"
   },
   "keywords": [
     "decky",
