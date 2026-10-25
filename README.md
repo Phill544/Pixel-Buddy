@@ -2,7 +2,7 @@
 
 A Decky Loader plugin that lets you monitor battery and control ANC on your Google Pixel Buds Pro directly from Steam Deck.
 
-![Pixel Buddy screenshot](assets/pixel-buddy-screenshot.jpg)
+![Pixel Buddy on Steam Deck](assets/pixel-buddy-full-deck.png)
 
 ## Features
 
@@ -30,7 +30,7 @@ Adaptive noise cancellation is shown when the Bluetooth device name identifies P
 **The plugin says "Not Connected" even though my buds are connected to the Deck.**
 
 1. Make sure the buds are out of the case and connected via SteamOS Bluetooth settings.
-2. SSH into the Deck and run the bundled binary directly to see the raw error:
+2. Close the Pixel Buddy panel so its polling does not compete for the Bluetooth connection. Then SSH into the Deck and run the bundled binary directly to see the raw error:
    ```bash
    ~/homebrew/plugins/pixel-buddy/bin/pbpctrl show battery
    ```

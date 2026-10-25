@@ -117,7 +117,7 @@ const Content: FC = () => {
     const title = loading ? "Connecting…" : !btOn ? "Bluetooth Off" : "Not Connected";
     const description = !btOn
       ? "Turn on Bluetooth in Steam settings to connect your Pixel Buds."
-      : "Pair your Pixel Buds in Steam Bluetooth settings, then take them out of the case.";
+      : "Once paired with your Steam Deck and taken out of the case, your Pixel Buds will be detected automatically.";
 
     return (
       <PanelSection title="Pixel Buds" spinner={loading}>
